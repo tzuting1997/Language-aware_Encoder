@@ -83,6 +83,8 @@ class ConformerEncoder(AbsEncoder):
     def __init__(
         self,
         input_size: int,
+        man_blocks,
+        eng_blocks,
         output_size: int = 256,
         attention_heads: int = 4,
         linear_units: int = 2048,
@@ -285,6 +287,36 @@ class ConformerEncoder(AbsEncoder):
             ),
             layer_drop_rate,
         )
+        self.man_encoders = repeat(
+            man_blocks,
+            lambda lnum: EncoderLayer(
+                output_size,
+                encoder_selfattn_layer(*encoder_selfattn_layer_args),
+                positionwise_layer(*positionwise_layer_args),
+                positionwise_layer(*positionwise_layer_args) if macaron_style else None,
+                convolution_layer(*convolution_layer_args) if use_cnn_module else None,
+                dropout_rate,
+                normalize_before,
+                concat_after,
+                stochastic_depth_rate[lnum],
+            ),
+            layer_drop_rate,
+        )
+        self.eng_encoders = repeat(
+            eng_blocks,
+            lambda lnum: EncoderLayer(
+                output_size,
+                encoder_selfattn_layer(*encoder_selfattn_layer_args),
+                positionwise_layer(*positionwise_layer_args),
+                positionwise_layer(*positionwise_layer_args) if macaron_style else None,
+                convolution_layer(*convolution_layer_args) if use_cnn_module else None,
+                dropout_rate,
+                normalize_before,
+                concat_after,
+                stochastic_depth_rate[lnum],
+            ),
+            layer_drop_rate,
+        )
         if self.normalize_before:
             self.after_norm = LayerNorm(output_size)
 
@@ -341,6 +373,8 @@ class ConformerEncoder(AbsEncoder):
         intermediate_outs = []
         if len(self.interctc_layer_idx) == 0:
             xs_pad, masks = self.encoders(xs_pad, masks)
+            man_xs_pad, masks = self.man_encoders(xs_pad, masks)
+            eng_xs_pad, masks = self.eng_encoders(xs_pad, masks)
         else:
             for layer_idx, encoder_layer in enumerate(self.encoders):
                 xs_pad, masks = encoder_layer(xs_pad, masks)
@@ -366,12 +400,15 @@ class ConformerEncoder(AbsEncoder):
                         else:
                             xs_pad = xs_pad + self.conditioning_layer(ctc_out)
 
-        if isinstance(xs_pad, tuple):
-            xs_pad = xs_pad[0]
+        if isinstance(man_xs_pad, tuple):
+            man_xs_pad = man_xs_pad[0]
+        if isinstance(eng_xs_pad, tuple):
+            eng_xs_pad = eng_xs_pad[0]
         if self.normalize_before:
-            xs_pad = self.after_norm(xs_pad)
+            man_xs_pad = self.after_norm(man_xs_pad)
+            eng_xs_pad = self.after_norm(eng_xs_pad)
 
         olens = masks.squeeze(1).sum(1)
         if len(intermediate_outs) > 0:
             return (xs_pad, intermediate_outs), olens, None
-        return xs_pad, olens, None
+        return man_xs_pad,eng_xs_pad, olens, None

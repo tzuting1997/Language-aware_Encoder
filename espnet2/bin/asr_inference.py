@@ -379,7 +379,7 @@ class Speech2Text:
         batch = to_device(batch, device=self.device)
 
         # b. Forward Encoder
-        enc, _ = self.asr_model.encode(**batch)
+        enc_man, enc_eng, _ = self.asr_model.encode(**batch)
         if self.multi_asr:
             enc = enc.unbind(dim=1)  # (batch, num_inf, ...) -> num_inf x [batch, ...]
         if self.enh_s2t_task or self.multi_asr:
@@ -404,10 +404,12 @@ class Speech2Text:
 
         else:
             # Normal ASR
-            if isinstance(enc, tuple):
-                enc = enc[0]
-            assert len(enc) == 1, len(enc)
-
+            if isinstance(enc_man, tuple):
+                enc_man = enc_man[0]
+                enc_eng = enc_eng[0]
+            assert len(enc_man) == 1, len(enc_man)
+            assert len(enc_eng) == 1, len(enc_eng)
+            enc = enc_man + enc_eng
             # c. Passed the encoder result and the beam search
             results = self._decode_single_sample(enc[0])
             assert check_return_type(results)

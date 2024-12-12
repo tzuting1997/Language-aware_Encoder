@@ -23,6 +23,7 @@ from espnet.nets.pytorch_backend.transformer.add_sos_eos import add_sos_eos
 from espnet.nets.pytorch_backend.transformer.label_smoothing_loss import (  # noqa: H301
     LabelSmoothingLoss,
 )
+import logging
 
 if V(torch.__version__) >= V("1.6.0"):
     from torch.cuda.amp import autocast
@@ -49,6 +50,12 @@ class ESPnetASRModel(AbsESPnetModel):
         decoder: Optional[AbsDecoder],
         ctc: CTC,
         joint_network: Optional[torch.nn.Module],
+        man_start: int,
+        man_end: int,
+        eng_start: int,
+        eng_end: int,
+        sym_low: int,
+        sym_up: int,
         aux_ctc: dict = None,
         ctc_weight: float = 0.5,
         interctc_weight: float = 0.0,
@@ -85,6 +92,12 @@ class ESPnetASRModel(AbsESPnetModel):
             self.eos = token_list.index(sym_eos)
         else:
             self.eos = vocab_size - 1
+        self.man_start = man_start
+        self.man_end = man_end
+        self.eng_start = eng_start
+        self.eng_end = eng_end
+        self.sym_low = sym_low
+        self.sym_up = sym_up
         self.vocab_size = vocab_size
         self.ignore_id = ignore_id
         self.ctc_weight = ctc_weight
@@ -214,25 +227,43 @@ class ESPnetASRModel(AbsESPnetModel):
         text = text[:, : text_lengths.max()]
 
         # 1. Encoder
-        encoder_out, encoder_out_lens = self.encode(speech, speech_lengths)
+        man_encoder_out, eng_encoder_out, encoder_out_lens = self.encode(speech, speech_lengths)
         intermediate_outs = None
-        if isinstance(encoder_out, tuple):
-            intermediate_outs = encoder_out[1]
-            encoder_out = encoder_out[0]
+        if isinstance(man_encoder_out, tuple):
+            intermediate_outs = man_encoder_out[1]
+            man_encoder_out = man_encoder_out[0]
+        if isinstance(eng_encoder_out, tuple):
+            intermediate_outs = eng_encoder_out[1]
+            eng_encoder_out = eng_encoder_out[0]
+
+        mix_encoder_out = man_encoder_out + eng_encoder_out
 
         loss_att, acc_att, cer_att, wer_att = None, None, None, None
         loss_ctc, cer_ctc = None, None
         loss_transducer, cer_transducer, wer_transducer = None, None, None
         stats = dict()
 
+        man_text = torch.where(torch.logical_and(text >= self.eng_start, text < self.eng_end), 2, text)
+        eng_text = torch.where(torch.logical_and(text >= self.man_start, text < self.man_end), 3, text)
+
         # 1. CTC branch
         if self.ctc_weight != 0.0:
+            man_loss_ctc, man_cer_ctc = self._calc_ctc_loss(
+                man_encoder_out, encoder_out_lens, man_text, text_lengths
+            )
+            eng_loss_ctc, eng_cer_ctc = self._calc_ctc_loss(
+                eng_encoder_out, encoder_out_lens, eng_text, text_lengths
+            )
             loss_ctc, cer_ctc = self._calc_ctc_loss(
-                encoder_out, encoder_out_lens, text, text_lengths
+                mix_encoder_out, encoder_out_lens, text, text_lengths
             )
 
             # Collect CTC branch stats
+            stats["man_loss_ctc"] = man_loss_ctc.detach() if man_loss_ctc is not None else None
+            stats["eng_loss_ctc"] = eng_loss_ctc.detach() if eng_loss_ctc is not None else None
             stats["loss_ctc"] = loss_ctc.detach() if loss_ctc is not None else None
+            stats["man_cer_ctc"] = man_cer_ctc
+            stats["eng_cer_ctc"] = eng_cer_ctc
             stats["cer_ctc"] = cer_ctc
 
         # Intermediate CTC (optional)
@@ -309,7 +340,7 @@ class ESPnetASRModel(AbsESPnetModel):
             # 2b. Attention decoder branch
             if self.ctc_weight != 1.0:
                 loss_att, acc_att, cer_att, wer_att = self._calc_att_loss(
-                    encoder_out, encoder_out_lens, text, text_lengths
+                    mix_encoder_out, encoder_out_lens, text, text_lengths
                 )
 
             # 3. CTC-Att loss definition
@@ -318,7 +349,7 @@ class ESPnetASRModel(AbsESPnetModel):
             elif self.ctc_weight == 1.0:
                 loss = loss_ctc
             else:
-                loss = self.ctc_weight * loss_ctc + (1 - self.ctc_weight) * loss_att
+                loss = self.ctc_weight * (man_loss_ctc + eng_loss_ctc + loss_ctc) + (1 - self.ctc_weight) * loss_att
 
             # Collect Attn branch stats
             stats["loss_att"] = loss_att.detach() if loss_att is not None else None
@@ -377,35 +408,43 @@ class ESPnetASRModel(AbsESPnetModel):
                 feats, feats_lengths, ctc=self.ctc
             )
         else:
-            encoder_out, encoder_out_lens, _ = self.encoder(feats, feats_lengths)
+            man_encoder_out, eng_encoder_out, encoder_out_lens, _ = self.encoder(feats, feats_lengths)
         intermediate_outs = None
-        if isinstance(encoder_out, tuple):
-            intermediate_outs = encoder_out[1]
-            encoder_out = encoder_out[0]
+        # if isinstance(encoder_out, tuple):
+        #     intermediate_outs = encoder_out[1]
+        #     encoder_out = encoder_out[0]
 
-        # Post-encoder, e.g. NLU
-        if self.postencoder is not None:
-            encoder_out, encoder_out_lens = self.postencoder(
-                encoder_out, encoder_out_lens
-            )
+        # # Post-encoder, e.g. NLU
+        # if self.postencoder is not None:
+        #     encoder_out, encoder_out_lens = self.postencoder(
+        #         encoder_out, encoder_out_lens
+        #     )
 
-        assert encoder_out.size(0) == speech.size(0), (
-            encoder_out.size(),
+        assert man_encoder_out.size(0) == speech.size(0), (
+            man_encoder_out.size(),
+            speech.size(0),
+        )
+        assert eng_encoder_out.size(0) == speech.size(0), (
+            eng_encoder_out.size(),
             speech.size(0),
         )
         if (
             getattr(self.encoder, "selfattention_layer_type", None) != "lf_selfattn"
             and not self.is_encoder_whisper
         ):
-            assert encoder_out.size(-2) <= encoder_out_lens.max(), (
-                encoder_out.size(),
+            assert man_encoder_out.size(-2) <= encoder_out_lens.max(), (
+                man_encoder_out.size(),
+                encoder_out_lens.max(),
+            )
+            assert eng_encoder_out.size(1) <= encoder_out_lens.max(), (
+                eng_encoder_out.size(),
                 encoder_out_lens.max(),
             )
 
         if intermediate_outs is not None:
             return (encoder_out, intermediate_outs), encoder_out_lens
 
-        return encoder_out, encoder_out_lens
+        return man_encoder_out, eng_encoder_out, encoder_out_lens
 
     def _extract_feats(
         self, speech: torch.Tensor, speech_lengths: torch.Tensor

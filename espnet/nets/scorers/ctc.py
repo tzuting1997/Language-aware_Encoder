@@ -5,7 +5,7 @@ import torch
 
 from espnet.nets.ctc_prefix_score import CTCPrefixScore, CTCPrefixScoreTH
 from espnet.nets.scorer_interface import BatchPartialScorerInterface
-
+import logging
 
 class CTCPrefixScorer(BatchPartialScorerInterface):
     """Decoder interface wrapper for CTCPrefixScore."""

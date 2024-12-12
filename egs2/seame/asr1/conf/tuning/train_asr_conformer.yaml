@@ -1,11 +1,11 @@
 # This configuration requires 2 GPUs with 32GB memory and 2 days for training
 batch_type: numel
-batch_bins: 15000000
+batch_bins: 3000000
 
-accum_grad: 2
+accum_grad: 28
 grad_clip: 5
-max_epoch: 120
-patience: none
+max_epoch: 75
+patience: 10
 init: xavier_uniform
 best_model_criterion:
 -   - valid
@@ -18,7 +18,9 @@ encoder_conf:
     output_size: 256
     attention_heads: 4
     linear_units: 2048
-    num_blocks: 12
+    num_blocks: 9
+    man_blocks: 3
+    eng_blocks: 3
     dropout_rate: 0.1
     positional_dropout_rate: 0.1
     attention_dropout_rate: 0.0
@@ -42,6 +44,12 @@ decoder_conf:
     src_attention_dropout_rate: 0.0
 
 model_conf:
+    man_start: 4
+    man_end: 2933
+    eng_start: 2934
+    eng_end: 5934
+    sym_low: 3
+    sym_up: 5935
     ctc_weight: 0.3
     lsm_weight: 0.1
     length_normalized_loss: false

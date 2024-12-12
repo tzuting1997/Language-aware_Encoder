@@ -28,7 +28,7 @@
 
 
 # Select the backend used by run.sh from "local", "stdout", "sge", "slurm", or "ssh"
-cmd_backend='local'
+cmd_backend='sge'
 
 # Local machine, without any Job scheduling system
 if [ "${cmd_backend}" = local ]; then
@@ -59,7 +59,7 @@ elif [ "${cmd_backend}" = sge ]; then
     # Note that to use "--gpu *", you have to setup "complex_value" for the system scheduler.
 
     export train_cmd="queue.pl"
-    export cuda_cmd="queue.pl"
+    export cuda_cmd="run.pl"
     export decode_cmd="queue.pl"
 
 

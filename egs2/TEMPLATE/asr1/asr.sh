@@ -72,7 +72,7 @@ ngram_exp=
 ngram_num=3
 
 # Language model related
-use_lm=true       # Use language model for ASR decoding.
+use_lm=false       # Use language model for ASR decoding.
 lm_tag=           # Suffix to the result dir for language model training.
 lm_exp=           # Specify the directory path for LM experiment.
                   # If this option is specified, lm_tag is ignored.
@@ -756,6 +756,8 @@ if ! "${skip_data_prep}"; then
             {
             echo "${blank}"
             echo "${oov}"
+            echo "<chn>"
+            echo "<eng>"
             # Remove <unk>, <s>, </s> from the vocabulary
             <"${bpeprefix}".vocab awk '{ if( NR != 1 && NR != 2 && NR != 3 ){ print $1; } }'
             echo "${sos_eos}"
