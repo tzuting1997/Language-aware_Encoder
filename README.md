@@ -13,3 +13,6 @@ This project reproduces the model architecture for the following papers:
 
 ## Installation Guide
 To set up the environment and dependencies, please refer to the official [ESPNET installation guide](https://espnet.github.io/espnet/installation.html).
+
+### Requirements
+- Python version: `3.8`
